@@ -7,6 +7,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
+import android.util.Log;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -20,6 +21,9 @@ import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.mlkit.common.model.DownloadConditions;
+import com.google.mlkit.nl.languageid.LanguageIdentification;
+import com.google.mlkit.nl.languageid.LanguageIdentificationOptions;
+import com.google.mlkit.nl.languageid.LanguageIdentifier;
 import com.google.mlkit.nl.translate.TranslateLanguage;
 import com.google.mlkit.nl.translate.Translation;
 import com.google.mlkit.nl.translate.Translator;
@@ -27,6 +31,7 @@ import com.google.mlkit.nl.translate.TranslatorOptions;
 
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class MainActivity extends AppCompatActivity {
     private Spinner fromSpinner, toSpinner;
@@ -91,10 +96,8 @@ public class MainActivity extends AppCompatActivity {
                 if(sourceEdt.getText().toString().isEmpty()){
                     Toast.makeText(MainActivity.this, "Please enter text to translate", Toast.LENGTH_LONG).show();
                 }
-                else if(fromLanguageCode.compareTo("") == 0){
-                    Toast.makeText(MainActivity.this, "Please enter source language", Toast.LENGTH_LONG).show();
-                }
-                else if(toLanguageCode.compareTo("") == 0){
+                // if no "To" language was found, continue to reprompt until language is entered
+                else if(toLanguageCode.compareTo("To") == 0){
                     Toast.makeText(MainActivity.this, "Please enter target language", Toast.LENGTH_LONG).show();
                 }
                 else{
@@ -133,16 +136,21 @@ public class MainActivity extends AppCompatActivity {
 
     private void translateText(String fromLanguageCode, String toLanguageCode, String source){
         translatedTV.setText("Downloading Model...");
+
+        // if no from language was identified, call function to identify languages and carry out translations, and return
+        if (fromLanguageCode.compareTo("From") == 0){
+            solveMissingLanguage(fromLanguageCode, toLanguageCode, source);
+            return;
+        }
+
+        // create translator
         TranslatorOptions options = new TranslatorOptions.Builder()
-                .setSourceLanguage(getLanguageLine(fromLanguageCode))
-                .setTargetLanguage(getLanguageLine(toLanguageCode))
+                .setSourceLanguage(getLanguageLine(fromLanguageCode, source))
+                .setTargetLanguage(getLanguageLine(toLanguageCode, source))
                 .build();
 
         Translator translator = Translation.getClient(options);
-
-
         DownloadConditions conditions = new DownloadConditions.Builder().requireWifi().build();
-
 
         translator.downloadModelIfNeeded(conditions).addOnSuccessListener(new OnSuccessListener<Void>() {
             @Override
@@ -168,7 +176,8 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    public String getLanguageLine(String languageCode) {
+    // switch statement to handle all different languages possible
+    public String getLanguageLine(String languageCode, String source) {
         switch (languageCode) {
             case "English":
                 return TranslateLanguage.ENGLISH;
@@ -199,8 +208,68 @@ public class MainActivity extends AppCompatActivity {
             case "French":
                 return TranslateLanguage.FRENCH;
             default:
-                Toast.makeText(this, "No valid language found", Toast.LENGTH_LONG).show();
                 return TranslateLanguage.ENGLISH;
         }
+    }
+
+    // function to use language identifier to detect language entered in the app
+    public void solveMissingLanguage(String fromLanguageCode, String toLanguageCode, String source){
+        LanguageIdentifier languageIdentifier =
+                LanguageIdentification.getClient();
+        languageIdentifier.identifyLanguage(source)
+                .addOnSuccessListener(
+                        new OnSuccessListener<String>() {
+                            @Override
+                            public void onSuccess(@Nullable String languageCode) {
+                                if (languageCode.equals("und")) {
+                                    Log.i("Language not found", "Can't identify language.");
+                                } else {
+                                    Log.i("Language Found", "Language: " + languageCode);
+                                    translateFromText(languageCode, toLanguageCode, source); // call function to utilize language code if found successfully
+                                }
+                            }
+                        })
+                .addOnFailureListener(
+                        new OnFailureListener() {
+                            @Override
+                            public void onFailure(@NonNull Exception e) {
+                                // Model couldn’t be loaded or other internal error.
+                                // ...
+                            }
+                        });
+    }
+
+    // create translator from language identifier and carry out translation
+    public void translateFromText(String fromLanguageCode, String toLanguageCode, String source){
+        TranslatorOptions options = new TranslatorOptions.Builder()
+                .setSourceLanguage(TranslateLanguage.fromLanguageTag(fromLanguageCode))
+                .setTargetLanguage(getLanguageLine(toLanguageCode, source))
+                .build();
+
+        Translator translator = Translation.getClient(options);
+        DownloadConditions conditions = new DownloadConditions.Builder().requireWifi().build();
+
+        translator.downloadModelIfNeeded(conditions).addOnSuccessListener(new OnSuccessListener<Void>() {
+            @Override
+            public void onSuccess(Void unused) {
+                translatedTV.setText("Translating...");
+                translator.translate(source).addOnSuccessListener(new OnSuccessListener<String>() {
+                    @Override
+                    public void onSuccess(String s) {
+                        translatedTV.setText(s); // already translated so set it to translated textview
+                    }
+                }).addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        Toast.makeText(MainActivity.this, "Failute to translate: "+e.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        }).addOnFailureListener(new OnFailureListener() {
+            @Override
+            public void onFailure(@NonNull Exception e) {
+                Toast.makeText(MainActivity.this, "Fail to download the model " + e.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        });
     }
 }
